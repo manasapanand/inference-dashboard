@@ -2,67 +2,83 @@ import streamlit as st
 import pandas as pd
 import json
 import plotly.express as px
+from pathlib import Path
 
 # ---------------- CONFIG ----------------
 st.set_page_config(
-    page_title="Post University Chat Inference Analytics Dashboard",
+    page_title="Chat Inference Analytics Dashboard",
     page_icon="🎓",
     layout="wide"
 )
 
+# 📂 Data files (relative paths for GitHub / Streamlit Cloud)
 DATA_FILES = [
-    "/Users/manasa/Desktop/langfuse/output/GPT_inference_edtech_gold_langfuse.json",
-    "/Users/manasa/Desktop/langfuse/output/GPT_inference_edtech_gold_fresh_test100.json"
+    "data/GPT_inference_edtech_gold_langfuse.json",
+    "data/GPT_inference_edtech_gold_fresh_test100.json"
 ]
 
 # ---------------- LOAD DATA ----------------
 @st.cache_data
 def load_data(files):
     all_sessions = []
+
     for path in files:
-        with open(path) as f:
+        file_path = Path(path)
+        if not file_path.exists():
+            st.warning(f"⚠️ Missing file: {path}")
+            continue
+
+        with open(file_path) as f:
             data = json.load(f)
-            sessions = data.get("sessions", [])
-            for s in sessions:
-                s["_source_file"] = path.split("/")[-1]  # optional lineage
-            all_sessions.extend(sessions)
+
+        sessions = data.get("sessions", [])
+        for s in sessions:
+            s["_source_file"] = file_path.name  # lineage tracking
+        all_sessions.extend(sessions)
+
     return all_sessions
 
+
 sessions = load_data(DATA_FILES)
+
+if not sessions:
+    st.error("❌ No sessions loaded. Check data files.")
+    st.stop()
 
 # ---------------- NORMALIZE ----------------
 rows = []
 
 for s in sessions:
-    inf = s["session_inference"]
+    inf = s.get("session_inference", {})
 
     timestamps = [
         pd.to_datetime(m.get("timestamp"), errors="coerce")
         for m in s.get("messages", [])
         if m.get("timestamp")
     ]
+
     if not timestamps:
         continue
 
     session_ts = min(timestamps)
 
     rows.append({
-        "sessionId": s["sessionId"],
-        "source": inf["source"],
-        "primary_intent": inf["primary_intent"],
-        "sentiment": inf["sentiment"],
-        "urgency": inf["urgency"],
-        "escalation": inf["escalation"]["required"],
-        "escalation_level": inf["escalation"]["level"],
-        "complexity_score": inf["complexity_score"],
-        "resolution_confidence": inf["resolution_confidence"],
-        "intent_count": len(inf["topics"]),
-        "intent_flow": inf["intent_flow"],
-        "risk_flags": ", ".join(inf["risk_flags"]),
+        "sessionId": s.get("sessionId"),
+        "source": inf.get("source"),
+        "primary_intent": inf.get("primary_intent"),
+        "sentiment": inf.get("sentiment"),
+        "urgency": inf.get("urgency"),
+        "escalation": inf.get("escalation", {}).get("required"),
+        "escalation_level": inf.get("escalation", {}).get("level"),
+        "complexity_score": inf.get("complexity_score"),
+        "resolution_confidence": inf.get("resolution_confidence"),
+        "intent_count": len(inf.get("topics", [])),
+        "intent_flow": inf.get("intent_flow"),
+        "risk_flags": ", ".join(inf.get("risk_flags", [])),
         "session_time": session_ts,
         "session_date": session_ts.date(),
         "session_week": session_ts.to_period("W").start_time,
-        "data_source": s["_source_file"]
+        "data_source": s.get("_source_file")
     })
 
 df = pd.DataFrame(rows)
@@ -72,14 +88,14 @@ st.sidebar.header("🔍 Filters")
 
 source_filter = st.sidebar.multiselect(
     "Support Source",
-    options=df["source"].unique(),
-    default=df["source"].unique()
+    options=df["source"].dropna().unique(),
+    default=df["source"].dropna().unique()
 )
 
 intent_filter = st.sidebar.multiselect(
     "Primary Intent",
-    options=df["primary_intent"].unique(),
-    default=df["primary_intent"].unique()
+    options=df["primary_intent"].dropna().unique(),
+    default=df["primary_intent"].dropna().unique()
 )
 
 data_source_filter = st.sidebar.multiselect(
@@ -109,11 +125,11 @@ it_helpdesk_count = len(filtered[filtered["source"] == "it_helpdesk"])
 escalation_rate = filtered["escalation"].mean() * 100 if total_sessions else 0
 
 # ---------------- HEADER ----------------
-st.title("🎓 Post University Chat Inference Analytics Dashboard")
+st.title("🎓 Chat Inference Analytics Dashboard")
 st.markdown("""
-This dashboard provides **end-to-end observability** into Post University chat interactions  
+Enterprise-grade observability into **chat interactions**  
 covering **intent detection, sentiment, urgency, escalation, risk, and time-series trends**  
-across **production + synthetic test sessions**.
+across **production and synthetic test sessions**.
 """)
 
 # ---------------- KPI ROW ----------------
@@ -136,8 +152,8 @@ c1.plotly_chart(
     px.bar(
         filtered,
         x="primary_intent",
-        title="Sessions by Primary Intent",
-        color="primary_intent"
+        color="primary_intent",
+        title="Sessions by Primary Intent"
     ),
     use_container_width=True
 )
@@ -172,8 +188,8 @@ c4.plotly_chart(
     px.bar(
         filtered,
         x="urgency",
-        title="Session Urgency Distribution",
-        color="urgency"
+        color="urgency",
+        title="Session Urgency Distribution"
     ),
     use_container_width=True
 )
@@ -208,8 +224,8 @@ c6.plotly_chart(
     px.bar(
         filtered,
         x="escalation_level",
-        title="Escalation Levels (L1 vs L2)",
-        color="escalation_level"
+        color="escalation_level",
+        title="Escalation Levels (L1 vs L2)"
     ),
     use_container_width=True
 )
@@ -242,9 +258,7 @@ daily = (
     .groupby("session_date")
     .agg(
         sessions=("sessionId", "count"),
-        escalation_rate=("escalation", "mean"),
-        avg_complexity=("complexity_score", "mean"),
-        avg_resolution=("resolution_confidence", "mean")
+        escalation_rate=("escalation", "mean")
     )
     .reset_index()
 )
@@ -289,35 +303,17 @@ st.subheader("🚨 Escalation Spike Alerts")
 
 alert_threshold = st.slider(
     "Escalation Spike Threshold (%)",
-    min_value=10,
-    max_value=80,
-    value=30,
-    step=5
+    10, 80, 30, step=5
 )
 
-alert_df = daily.copy()
-alert_df["escalation_pct"] = alert_df["escalation_rate"] * 100
-
-spikes = alert_df[alert_df["escalation_pct"] >= alert_threshold]
+daily["escalation_pct"] = daily["escalation_rate"] * 100
+spikes = daily[daily["escalation_pct"] >= alert_threshold]
 
 if spikes.empty:
-    st.success("✅ No escalation spikes detected above threshold.")
+    st.success("✅ No escalation spikes detected.")
 else:
     st.error("🚨 Escalation Spikes Detected")
-    st.dataframe(
-        spikes[["session_date", "sessions", "escalation_pct"]],
-        use_container_width=True
-    )
-
-    st.plotly_chart(
-        px.bar(
-            spikes,
-            x="session_date",
-            y="escalation_pct",
-            title="Escalation Spike Days (%)"
-        ),
-        use_container_width=True
-    )
+    st.dataframe(spikes, use_container_width=True)
 
 # =========================================================
 # 📄 DETAIL TABLE

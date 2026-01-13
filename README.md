@@ -1,4 +1,4 @@
-# 🎓 Post University Chat Inference Analytics Dashboard
+# 🎓 Chat Inference Analytics Dashboard
 
 This Streamlit dashboard provides end-to-end analytics and observability for
 Post University’s EdTech chatbot conversations.
